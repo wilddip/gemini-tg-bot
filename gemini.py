@@ -6,17 +6,15 @@ from PIL import Image
 from telebot.types import Message
 from md2tgmd import escape
 from telebot import TeleBot
-from config import conf, generation_config
+from config import conf
 from google import genai
 
-gemini_draw_dict = {}
 gemini_chat_dict = {}
 gemini_pro_chat_dict = {}
 default_model_dict = {}
 
 model_1                 =       conf["model_1"]
 model_2                 =       conf["model_2"]
-model_3                 =       conf["model_3"]
 error_info              =       conf["error_info"]
 before_generate_info    =       conf["before_generate_info"]
 download_pic_notify     =       conf["download_pic_notify"]
@@ -105,45 +103,3 @@ async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str, pho
             )
         else:
             await bot.reply_to(message, f"{error_info}\nError details: {str(e)}")
-
-async def gemini_edit(bot: TeleBot, message: Message, m: str, photo_file: bytes):
-
-    image = Image.open(io.BytesIO(photo_file))
-    try:
-        response = await client.aio.models.generate_content(
-        model=model_3,
-        contents=[m, image],
-        config=generation_config
-    )
-    except Exception as e:
-        await bot.send_message(message.chat.id, e.str())
-    for part in response.candidates[0].content.parts:
-        if part.text is not None:
-            await bot.send_message(message.chat.id, escape(part.text), parse_mode="MarkdownV2")
-        elif part.inline_data is not None:
-            photo = part.inline_data.data
-            await bot.send_photo(message.chat.id, photo)
-
-async def gemini_draw(bot:TeleBot, message:Message, m:str):
-    chat_dict = gemini_draw_dict
-    if str(message.from_user.id) not in chat_dict:
-        chat = client.aio.chats.create(
-            model=model_3,
-            config=generation_config,
-        )
-        chat_dict[str(message.from_user.id)] = chat
-    else:
-        chat = chat_dict[str(message.from_user.id)]
-
-    response = await chat.send_message(m)
-    for part in response.candidates[0].content.parts:
-        if part.text is not None:
-            text = part.text
-            while len(text) > 4000:
-                await bot.send_message(message.chat.id, escape(text[:4000]), parse_mode="MarkdownV2")
-                text = text[4000:]
-            if text:
-                await bot.send_message(message.chat.id, escape(text), parse_mode="MarkdownV2")
-        elif part.inline_data is not None:
-            photo = part.inline_data.data
-            await bot.send_photo(message.chat.id, photo)
