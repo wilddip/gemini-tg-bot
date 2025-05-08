@@ -19,7 +19,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ vars.DOCKER_USERNAME }}/Gemini-Telegram-Bot
+          images: ${{ vars.DOCKER_USERNAME }}/gemini-tg-bot
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
