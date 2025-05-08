@@ -18,7 +18,12 @@ gemini_draw_dict        = gemini.gemini_draw_dict
 
 async def start(message: Message, bot: TeleBot) -> None:
     try:
-        await bot.reply_to(message , escape("Welcome, you can ask me questions now. \nFor example: `Who is john lennon?`"), parse_mode="MarkdownV2")
+        if str(message.from_user.id) not in default_model_dict:
+            default_model_dict[str(message.from_user.id)] = True
+            model = model_1
+        else:
+            model = model_1 if default_model_dict[str(message.from_user.id)] else model_2
+        await bot.reply_to(message, escape(f"Welcome! You can ask me questions now.\nCurrent model: `{model}`\nFor example: `Who is john lennon?`"), parse_mode="MarkdownV2")
     except IndexError:
         await bot.reply_to(message, error_info)
 
@@ -78,28 +83,33 @@ async def gemini_private_handler(message: Message, bot: TeleBot) -> None:
 async def gemini_photo_handler(message: Message, bot: TeleBot) -> None:
     if message.chat.type != "private":
         s = message.caption or ""
-        if not s or not (s.startswith("/gemini")):
+        if not s:
             return
         try:
-            m = s.strip().split(maxsplit=1)[1].strip() if len(s.strip().split(maxsplit=1)) > 1 else ""
             file_path = await bot.get_file(message.photo[-1].file_id)
             photo_file = await bot.download_file(file_path.file_path)
         except Exception:
             traceback.print_exc()
             await bot.reply_to(message, error_info)
             return
-        await gemini.gemini_edit(bot, message, m, photo_file)
+        await gemini.gemini_stream(bot, message, s, model_1, photo_file)
     else:
         s = message.caption or ""
         try:
-            m = s.strip().split(maxsplit=1)[1].strip() if len(s.strip().split(maxsplit=1)) > 1 else ""
             file_path = await bot.get_file(message.photo[-1].file_id)
             photo_file = await bot.download_file(file_path.file_path)
         except Exception:
             traceback.print_exc()
             await bot.reply_to(message, error_info)
             return
-        await gemini.gemini_edit(bot, message, m, photo_file)
+        if str(message.from_user.id) not in default_model_dict:
+            default_model_dict[str(message.from_user.id)] = True
+            await gemini.gemini_stream(bot, message, s, model_1, photo_file)
+        else:
+            if default_model_dict[str(message.from_user.id)]:
+                await gemini.gemini_stream(bot, message, s, model_1, photo_file)
+            else:
+                await gemini.gemini_stream(bot, message, s, model_2, photo_file)
 
 async def gemini_edit_handler(message: Message, bot: TeleBot) -> None:
     if not message.photo:

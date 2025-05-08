@@ -25,7 +25,7 @@ search_tool = {'google_search': {}}
 
 client = genai.Client(api_key=sys.argv[2])
 
-async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str):
+async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str, photo_file:bytes=None):
     sent_message = None
     try:
         sent_message = await bot.reply_to(message, "🤖 Generating answers...")
@@ -42,7 +42,11 @@ async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str):
         else:
             chat = chat_dict[str(message.from_user.id)]
 
-        response = await chat.send_message_stream(m)
+        if photo_file:
+            image = Image.open(io.BytesIO(photo_file))
+            response = await chat.send_message_stream([m, image])
+        else:
+            response = await chat.send_message_stream(m)
 
         full_response = ""
         last_update = time.time()
@@ -54,7 +58,6 @@ async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str):
                 current_time = time.time()
 
                 if current_time - last_update >= update_interval:
-
                     try:
                         await bot.edit_message_text(
                             escape(full_response),
@@ -91,7 +94,6 @@ async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str):
                     )
             except Exception:
                 traceback.print_exc()
-
 
     except Exception as e:
         traceback.print_exc()
