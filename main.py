@@ -2,6 +2,8 @@ import argparse
 import traceback
 import asyncio
 import re
+import signal
+import sys
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 import handlers
@@ -14,8 +16,21 @@ parser.add_argument("GOOGLE_GEMINI_KEY", help="Google Gemini API key")
 options = parser.parse_args()
 print("Arg parse done.")
 
+# Global bot instance
+bot = None
+
+def signal_handler(signum, frame):
+    print(f"\nShutting down...")
+    if bot:
+        asyncio.create_task(bot.stop_polling())
+    sys.exit(0)
 
 async def main():
+    global bot
+    # Set up signal handlers
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
     # Init bot
     bot = AsyncTeleBot(options.tg_token)
     await bot.delete_my_commands(scope=None, language_code=None)
@@ -45,7 +60,13 @@ async def main():
 
     # Start bot
     print("Starting Gemini_Telegram_Bot.")
+    print("Bot is ready!")
     await bot.polling(none_stop=True)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nReceived keyboard interrupt, shutting down...")
+        if bot:
+            asyncio.run(bot.stop_polling())
