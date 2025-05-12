@@ -25,20 +25,8 @@ search_tool = {'google_search': {}}
 
 client = genai.Client(api_key=sys.argv[2])
 
-def split_by_paragraphs(text: str, max_len: int) -> list[str]:
-    parts = text.split("\n\n")
-    result = []
-    buf = ""
-    for p in parts:
-        if len(escape(buf + ("\n\n" if buf else "") + p)) <= max_len:
-            buf += ("\n\n" if buf else "") + p
-        else:
-            if buf:
-                result.append(buf)
-            buf = p
-    if buf:
-        result.append(buf)
-    return result
+def split_by_paragraphs(text: str) -> list[str]:
+    return text.split("\n\n")
 
 async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str, photo_file:bytes=None):
     try:
@@ -62,27 +50,66 @@ async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str, pho
         else:
             response = await chat.send_message_stream(m)
 
-        full_response = ""
-        async for chunk in response:
-            if hasattr(chunk, 'text') and chunk.text:
-                full_response += chunk.text
-        
-        msgs = split_by_paragraphs(full_response, TG_MAX_LENGTH)
+        buf = ""
         first = True
-        for msg in msgs:
+        for chunk in response:
+            if hasattr(chunk, 'text') and chunk.text:
+                buf += chunk.text
+                paragraphs = split_by_paragraphs(buf)
+                msg_buf = ""
+                for i, p in enumerate(paragraphs):
+                    test_buf = msg_buf + ("\n\n" if msg_buf else "") + p
+                    if len(escape(test_buf)) > TG_MAX_LENGTH:
+                        try:
+                            if first:
+                                await bot.edit_message_text(
+                                    escape(msg_buf),
+                                    chat_id=prev_msg.chat.id,
+                                    message_id=prev_msg.message_id,
+                                    parse_mode="MarkdownV2"
+                                )
+                                first = False
+                            else:
+                                prev_msg = await bot.send_message(
+                                    prev_msg.chat.id,
+                                    escape(msg_buf),
+                                    reply_to_message_id=prev_msg.message_id,
+                                    parse_mode="MarkdownV2"
+                                )
+                        except Exception as e:
+                            if "parse markdown" in str(e).lower():
+                                if first:
+                                    await bot.edit_message_text(
+                                        msg_buf,
+                                        chat_id=prev_msg.chat.id,
+                                        message_id=prev_msg.message_id
+                                    )
+                                    first = False
+                                else:
+                                    prev_msg = await bot.send_message(
+                                        prev_msg.chat.id,
+                                        msg_buf,
+                                        reply_to_message_id=prev_msg.message_id
+                                    )
+                            else:
+                                print(f"Error sending message: {e}")
+                        msg_buf = p
+                    else:
+                        msg_buf = test_buf
+                buf = msg_buf
+        if buf.strip():
             try:
                 if first:
                     await bot.edit_message_text(
-                        escape(msg),
+                        escape(buf),
                         chat_id=prev_msg.chat.id,
                         message_id=prev_msg.message_id,
                         parse_mode="MarkdownV2"
                     )
-                    first = False
                 else:
-                    prev_msg = await bot.send_message(
+                    await bot.send_message(
                         prev_msg.chat.id,
-                        escape(msg),
+                        escape(buf),
                         reply_to_message_id=prev_msg.message_id,
                         parse_mode="MarkdownV2"
                     )
@@ -90,20 +117,18 @@ async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str, pho
                 if "parse markdown" in str(e).lower():
                     if first:
                         await bot.edit_message_text(
-                            msg,
+                            buf,
                             chat_id=prev_msg.chat.id,
                             message_id=prev_msg.message_id
                         )
-                        first = False
                     else:
-                        prev_msg = await bot.send_message(
+                        await bot.send_message(
                             prev_msg.chat.id,
-                            msg,
+                            buf,
                             reply_to_message_id=prev_msg.message_id
                         )
                 else:
                     print(f"Error sending message: {e}")
-
     except Exception as e:
         traceback.print_exc()
         await bot.reply_to(message, f"{error_info}\nError details: {str(e)}")
