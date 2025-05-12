@@ -210,4 +210,4 @@ async def gemini_stream(bot: TeleBot, usr_msg: Message, query_text: str, model_k
     except Exception as e:
         traceback.print_exc()
         lang = getattr(usr_msg.from_user, 'language_code', 'en')
-        await usr_msg.reply_to(f"{get_text('error', lang)} {str(e)}")
+        await bot.reply_to(usr_msg, f"{get_text('error', lang)} {str(e)}")
