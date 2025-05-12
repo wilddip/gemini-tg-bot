@@ -67,6 +67,16 @@ async def send_text_in_segments(bot: TeleBot, chat_id: int, text_content: str, i
             else:
                 print(f"Err in send_text_in_segments (final): {e_send_final_seg}")
 
+async def split_at_last_paragraph(text: str) -> tuple[str, str]:
+    if "\n\n" not in text:
+        return text, ""
+    
+    parts = text.split("\n\n")
+    if len(parts) <= 1:
+        return text, ""
+    
+    return "\n\n".join(parts[:-1]), parts[-1]
+
 async def gemini_stream(bot: TeleBot, usr_msg: Message, query_text: str, model_key: str, img_bytes: bytes = None):
     try:
         lang = getattr(usr_msg.from_user, 'language_code', 'en')
@@ -91,29 +101,45 @@ async def gemini_stream(bot: TeleBot, usr_msg: Message, query_text: str, model_k
                 buffer += chunk.text
                 current_time = time.time()
 
-                if len(escape(buffer)) > TG_MAX_LENGTH:
-                    try:
-                        active_msg = await bot.send_message(
-                            active_msg.chat.id,
-                            escape(buffer),
-                            reply_to_message_id=active_msg.message_id,
-                            parse_mode="MarkdownV2"
-                        )
-                        buffer = ""
-                        last_update_time = current_time
-                    except Exception as e_overflow:
-                        if "parse markdown" in str(e_overflow).lower():
-                            active_msg = await bot.send_message(
-                                active_msg.chat.id,
-                                buffer,
-                                reply_to_message_id=active_msg.message_id
+                if len(escape(buffer)) > TG_MAX_LENGTH * 0.85:
+                    first_part, last_part = await split_at_last_paragraph(buffer)
+                    
+                    if first_part:
+                        try:
+                            await bot.edit_message_text(
+                                escape(first_part),
+                                chat_id=active_msg.chat.id,
+                                message_id=active_msg.message_id,
+                                parse_mode="MarkdownV2"
                             )
-                            buffer = ""
+                        except Exception as e_edit_overflow:
+                            if "parse markdown" in str(e_edit_overflow).lower():
+                                await bot.edit_message_text(
+                                    first_part,
+                                    chat_id=active_msg.chat.id,
+                                    message_id=active_msg.message_id
+                                )
+                            elif "message is not modified" not in str(e_edit_overflow).lower():
+                                print(f"Error updating message before split: {e_edit_overflow}")
+
+                        try:
+                            continue_msg = ""
+                            if last_part:
+                                continue_msg = last_part
+                            
+                            new_msg = await bot.send_message(
+                                active_msg.chat.id,
+                                escape(continue_msg) if continue_msg else "...",
+                                reply_to_message_id=active_msg.message_id,
+                                parse_mode="MarkdownV2"
+                            )
+                            active_msg = new_msg
+                            buffer = last_part
                             last_update_time = current_time
-                        else:
-                            print(f"Error creating new message on overflow: {e_overflow}")
+                        except Exception as e_new_after_split:
+                            print(f"Error creating message after split: {e_new_after_split}")
                 
-                elif buffer and current_time - last_update_time >= update_interval:
+                elif current_time - last_update_time >= update_interval:
                     try:
                         await bot.edit_message_text(
                             escape(buffer),
@@ -131,26 +157,36 @@ async def gemini_stream(bot: TeleBot, usr_msg: Message, query_text: str, model_k
                             )
                             last_update_time = current_time
                         elif "message is too long" in str(e_update).lower():
+                            first_part, last_part = await split_at_last_paragraph(buffer)
+                            if first_part:
+                                try:
+                                    await bot.edit_message_text(
+                                        escape(first_part),
+                                        chat_id=active_msg.chat.id,
+                                        message_id=active_msg.message_id,
+                                        parse_mode="MarkdownV2"
+                                    )
+                                except Exception as e_edit_long:
+                                    if "parse markdown" in str(e_edit_long).lower():
+                                        await bot.edit_message_text(
+                                            first_part,
+                                            chat_id=active_msg.chat.id,
+                                            message_id=active_msg.message_id
+                                        )
+                            
                             try:
-                                active_msg = await bot.send_message(
+                                continue_msg = last_part if last_part else "..."
+                                new_msg = await bot.send_message(
                                     active_msg.chat.id,
-                                    escape(buffer),
+                                    escape(continue_msg),
                                     reply_to_message_id=active_msg.message_id,
                                     parse_mode="MarkdownV2"
                                 )
-                                buffer = ""
+                                active_msg = new_msg
+                                buffer = last_part
                                 last_update_time = current_time
-                            except Exception as e_new_msg:
-                                if "parse markdown" in str(e_new_msg).lower():
-                                    active_msg = await bot.send_message(
-                                        active_msg.chat.id,
-                                        buffer,
-                                        reply_to_message_id=active_msg.message_id
-                                    )
-                                    buffer = ""
-                                    last_update_time = current_time
-                                else:
-                                    print(f"Error creating new message after too-long error: {e_new_msg}")
+                            except Exception as e_new_msg_after_error:
+                                print(f"Error creating new message after too-long error: {e_new_msg_after_error}")
                         elif "message is not modified" not in str(e_update).lower():
                             print(f"Update error: {e_update}")
 
@@ -170,22 +206,40 @@ async def gemini_stream(bot: TeleBot, usr_msg: Message, query_text: str, model_k
                         message_id=active_msg.message_id
                     )
                 elif "message is too long" in str(e_final).lower():
-                    try:
-                        await bot.send_message(
-                            active_msg.chat.id,
-                            escape(buffer),
-                            reply_to_message_id=active_msg.message_id,
-                            parse_mode="MarkdownV2"
-                        )
-                    except Exception as e_final_new:
-                        if "parse markdown" in str(e_final_new).lower():
+                    first_part, last_part = await split_at_last_paragraph(buffer)
+                    if first_part:
+                        try:
+                            await bot.edit_message_text(
+                                escape(first_part),
+                                chat_id=active_msg.chat.id,
+                                message_id=active_msg.message_id,
+                                parse_mode="MarkdownV2"
+                            )
+                        except Exception as e_edit_final:
+                            if "parse markdown" in str(e_edit_final).lower():
+                                await bot.edit_message_text(
+                                    first_part, 
+                                    chat_id=active_msg.chat.id,
+                                    message_id=active_msg.message_id
+                                )
+                    
+                    if last_part:
+                        try:
                             await bot.send_message(
                                 active_msg.chat.id,
-                                buffer,
-                                reply_to_message_id=active_msg.message_id
+                                escape(last_part),
+                                reply_to_message_id=active_msg.message_id,
+                                parse_mode="MarkdownV2"
                             )
-                        else:
-                            print(f"Error sending final new message: {e_final_new}")
+                        except Exception as e_final_new:
+                            if "parse markdown" in str(e_final_new).lower():
+                                await bot.send_message(
+                                    active_msg.chat.id,
+                                    last_part,
+                                    reply_to_message_id=active_msg.message_id
+                                )
+                            else:
+                                print(f"Error sending final new message: {e_final_new}")
                 elif "message is not modified" not in str(e_final).lower():
                     print(f"Final update error: {e_final}")
 
