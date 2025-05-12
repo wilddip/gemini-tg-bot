@@ -52,7 +52,7 @@ async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str, pho
 
         buf = ""
         first = True
-        for chunk in response:
+        async for chunk in response:
             if hasattr(chunk, 'text') and chunk.text:
                 buf += chunk.text
                 paragraphs = split_by_paragraphs(buf)
