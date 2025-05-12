@@ -25,21 +25,24 @@ search_tool = {'google_search': {}}
 
 client = genai.Client(api_key=sys.argv[2])
 
-async def trim_to_last_paragraph(text: str) -> tuple[str, str]:
+def split_by_paragraphs(text: str, max_len: int) -> list[str]:
     parts = text.split("\n\n")
-    if len(parts) <= 1:
-        return text, ""
-    
-    return "\n\n".join(parts[:-1]), parts[-1]
-
-async def should_split_message(text: str) -> bool:
-    return len(escape(text)) >= TG_MAX_LENGTH
+    result = []
+    buf = ""
+    for p in parts:
+        if len(escape(buf + ("\n\n" if buf else "") + p)) <= max_len:
+            buf += ("\n\n" if buf else "") + p
+        else:
+            if buf:
+                result.append(buf)
+            buf = p
+    if buf:
+        result.append(buf)
+    return result
 
 async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str, photo_file:bytes=None):
-    sent_message = None
-    next_part = ""
     try:
-        sent_message = await bot.reply_to(message, "🤖 Generating answers...")
+        prev_msg = await bot.reply_to(message, "🤖 Generating answers...")
 
         chat = None
         if model_type == model_1:
@@ -60,97 +63,47 @@ async def gemini_stream(bot:TeleBot, message:Message, m:str, model_type:str, pho
             response = await chat.send_message_stream(m)
 
         full_response = ""
-        last_update = time.time()
-        update_interval = conf["streaming_update_interval"]
-        current_msg = sent_message
-
         async for chunk in response:
             if hasattr(chunk, 'text') and chunk.text:
-                if next_part:
-                    full_response = next_part + "\n\n"
-                    next_part = ""
                 full_response += chunk.text
-                current_time = time.time()
-
-                if current_time - last_update >= update_interval:
-                    if await should_split_message(full_response):
-                        current_text, next_part = await trim_to_last_paragraph(full_response)
-                        try:
-                            await bot.edit_message_text(
-                                escape(current_text),
-                                chat_id=current_msg.chat.id,
-                                message_id=current_msg.message_id,
-                                parse_mode="MarkdownV2"
-                            )
-                        except Exception as md_e:
-                            if "parse markdown" in str(md_e).lower():
-                                await bot.edit_message_text(
-                                    current_text,
-                                    chat_id=current_msg.chat.id,
-                                    message_id=current_msg.message_id
-                                )
-                            current_msg = await bot.reply_to(message, next_part)
-                            full_response = next_part
-                    else:
-                        try:
-                            await bot.edit_message_text(
-                                escape(full_response),
-                                chat_id=current_msg.chat.id,
-                                message_id=current_msg.message_id,
-                                parse_mode="MarkdownV2"
-                            )
-                        except Exception as e:
-                            if "parse markdown" in str(e).lower():
-                                await bot.edit_message_text(
-                                    full_response,
-                                    chat_id=current_msg.chat.id,
-                                    message_id=current_msg.message_id
-                                )
-                            elif "message is not modified" not in str(e).lower():
-                                print(f"Error updating message: {e}")
-                    last_update = current_time
-
-        if await should_split_message(full_response):
-            current_text, next_part = await trim_to_last_paragraph(full_response)
+        
+        msgs = split_by_paragraphs(full_response, TG_MAX_LENGTH)
+        first = True
+        for msg in msgs:
             try:
-                await bot.edit_message_text(
-                    escape(current_text),
-                    chat_id=current_msg.chat.id,
-                    message_id=current_msg.message_id,
-                    parse_mode="MarkdownV2"
-                )
-            except Exception as md_e:
-                if "parse markdown" in str(md_e).lower():
+                if first:
                     await bot.edit_message_text(
-                        current_text,
-                        chat_id=current_msg.chat.id,
-                        message_id=current_msg.message_id
+                        escape(msg),
+                        chat_id=prev_msg.chat.id,
+                        message_id=prev_msg.message_id,
+                        parse_mode="MarkdownV2"
                     )
-            if next_part:
-                await bot.reply_to(message, next_part)
-        else:
-            try:
-                await bot.edit_message_text(
-                    escape(full_response),
-                    chat_id=current_msg.chat.id,
-                    message_id=current_msg.message_id,
-                    parse_mode="MarkdownV2"
-                )
+                    first = False
+                else:
+                    prev_msg = await bot.send_message(
+                        prev_msg.chat.id,
+                        escape(msg),
+                        reply_to_message_id=prev_msg.message_id,
+                        parse_mode="MarkdownV2"
+                    )
             except Exception as e:
                 if "parse markdown" in str(e).lower():
-                    await bot.edit_message_text(
-                        full_response,
-                        chat_id=current_msg.chat.id,
-                        message_id=current_msg.message_id
-                    )
+                    if first:
+                        await bot.edit_message_text(
+                            msg,
+                            chat_id=prev_msg.chat.id,
+                            message_id=prev_msg.message_id
+                        )
+                        first = False
+                    else:
+                        prev_msg = await bot.send_message(
+                            prev_msg.chat.id,
+                            msg,
+                            reply_to_message_id=prev_msg.message_id
+                        )
+                else:
+                    print(f"Error sending message: {e}")
 
     except Exception as e:
         traceback.print_exc()
-        if sent_message:
-            await bot.edit_message_text(
-                f"{error_info}\nError details: {str(e)}",
-                chat_id=sent_message.chat.id,
-                message_id=sent_message.message_id
-            )
-        else:
-            await bot.reply_to(message, f"{error_info}\nError details: {str(e)}")
+        await bot.reply_to(message, f"{error_info}\nError details: {str(e)}")
