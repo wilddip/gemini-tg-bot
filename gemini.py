@@ -70,7 +70,7 @@ async def send_text_in_segments(bot: TeleBot, chat_id: int, text_content: str, i
 async def gemini_stream(bot: TeleBot, usr_msg: Message, query_text: str, model_key: str, img_bytes: bytes = None):
     try:
         lang = getattr(usr_msg.from_user, 'language_code', 'en')
-        active_telegram_msg = await bot.reply_to(usr_msg, get_text('generating', lang))
+        active_msg = await bot.reply_to(usr_msg, get_text('generating', lang))
 
         uid = str(usr_msg.from_user.id)
         chat_storage = gemini_chat_dict if model_key == model_1 else gemini_pro_chat_dict
@@ -82,132 +82,118 @@ async def gemini_stream(bot: TeleBot, usr_msg: Message, query_text: str, model_k
         content_for_gemini = [query_text, Image.open(io.BytesIO(img_bytes))] if img_bytes else [query_text]
         gemini_response_stream = await chat_session.send_message_stream(content_for_gemini)
 
-        accumulated_response_text = ""
-        is_first_response_segment = True
-        
-        last_prog_update_ts = time.time()
-        prog_update_interval = conf.get("streaming_update_interval", 0.5)
+        buffer = ""
+        last_update_time = time.time()
+        update_interval = conf.get("streaming_update_interval", 0.5)
 
         async for chunk in gemini_response_stream:
             if hasattr(chunk, 'text') and chunk.text:
-                accumulated_response_text += chunk.text
-                current_ts = time.time()
+                buffer += chunk.text
+                current_time = time.time()
 
-                if current_ts - last_prog_update_ts >= prog_update_interval:
-                    if accumulated_response_text.strip():
-                        escaped_buffer_for_edit = escape(accumulated_response_text)
-                        if len(escaped_buffer_for_edit) < TG_MAX_LENGTH:
-                            try:
-                                await bot.edit_message_text(
-                                    escaped_buffer_for_edit,
-                                    chat_id=active_telegram_msg.chat.id,
-                                    message_id=active_telegram_msg.message_id,
-                                    parse_mode="MarkdownV2"
-                                )
-                                last_prog_update_ts = current_ts
-                            except Exception as e_stream_edit:
-                                if "parse markdown" in str(e_stream_edit).lower():
-                                    await bot.edit_message_text(
-                                        accumulated_response_text,
-                                        chat_id=active_telegram_msg.chat.id,
-                                        message_id=active_telegram_msg.message_id
-                                    )
-                                    last_prog_update_ts = current_ts
-                                elif "message is not modified" not in str(e_stream_edit).lower():
-                                    print(f"Stream edit err: {e_stream_edit}")
-                
-                response_paragraphs = split_by_paragraphs(accumulated_response_text)
-                current_segment_text = ""
-                
-                for paragraph_content in response_paragraphs:
-                    potential_segment_text = current_segment_text + ("\n\n" if current_segment_text else "") + paragraph_content
-                    
-                    if len(escape(potential_segment_text)) > TG_MAX_LENGTH:
-                        if current_segment_text.strip():
-                            try:
-                                if is_first_response_segment:
-                                    await bot.edit_message_text(
-                                        escape(current_segment_text),
-                                        chat_id=active_telegram_msg.chat.id,
-                                        message_id=active_telegram_msg.message_id,
-                                        parse_mode="MarkdownV2"
-                                    )
-                                    is_first_response_segment = False
-                                else:
-                                    active_telegram_msg = await bot.send_message(
-                                        active_telegram_msg.chat.id,
-                                        escape(current_segment_text),
-                                        reply_to_message_id=active_telegram_msg.message_id,
-                                        parse_mode="MarkdownV2"
-                                    )
-                                last_prog_update_ts = time.time()
-                            except Exception as e_main_send:
-                                if "parse markdown" in str(e_main_send).lower():
-                                    if is_first_response_segment:
-                                        await bot.edit_message_text(current_segment_text, chat_id=active_telegram_msg.chat.id, message_id=active_telegram_msg.message_id)
-                                        is_first_response_segment = False
-                                    else:
-                                        active_telegram_msg = await bot.send_message(active_telegram_msg.chat.id, current_segment_text, reply_to_message_id=active_telegram_msg.message_id)
-                                    last_prog_update_ts = time.time()
-                                else:
-                                    print(f"Main send/edit err: {e_main_send}")
-                        current_segment_text = paragraph_content
-                    else:
-                        current_segment_text = potential_segment_text
-                
-                accumulated_response_text = current_segment_text
-        
-        if accumulated_response_text.strip():
-            escaped_final_text = escape(accumulated_response_text)
-            if len(escaped_final_text) <= TG_MAX_LENGTH:
-                try:
-                    await bot.edit_message_text(
-                        escaped_final_text,
-                        chat_id=active_telegram_msg.chat.id,
-                        message_id=active_telegram_msg.message_id,
-                        parse_mode="MarkdownV2"
-                    )
-                except Exception as e_final_fit:
-                    if "parse markdown" in str(e_final_fit).lower():
-                        await bot.edit_message_text(accumulated_response_text, chat_id=active_telegram_msg.chat.id, message_id=active_telegram_msg.message_id)
-                    elif "message is not modified" not in str(e_final_fit).lower():
-                        print(f"Final (fit) edit err: {e_final_fit}")
-            else:
-                part_for_edit = ""
-                remaining_text_for_new_msgs = accumulated_response_text
-                
-                temp_paras = split_by_paragraphs(accumulated_response_text)
-                for k_idx in range(len(temp_paras), 0, -1):
-                    potential_edit_part = "\n\n".join(temp_paras[:k_idx])
-                    if len(escape(potential_edit_part)) <= TG_MAX_LENGTH:
-                        part_for_edit = potential_edit_part
-                        remaining_text_for_new_msgs = "\n\n".join(temp_paras[k_idx:])
-                        break
-                
-                if part_for_edit.strip():
+                if len(escape(buffer)) > TG_MAX_LENGTH:
                     try:
-                        await bot.edit_message_text(
-                            escape(part_for_edit),
-                            chat_id=active_telegram_msg.chat.id,
-                            message_id=active_telegram_msg.message_id,
+                        active_msg = await bot.send_message(
+                            active_msg.chat.id,
+                            escape(buffer),
+                            reply_to_message_id=active_msg.message_id,
                             parse_mode="MarkdownV2"
                         )
-                        if is_first_response_segment: is_first_response_segment = False
-                    except Exception as e_edit_pfe:
-                        if "parse markdown" in str(e_edit_pfe).lower():
-                            await bot.edit_message_text(part_for_edit, chat_id=active_telegram_msg.chat.id, message_id=active_telegram_msg.message_id)
-                            if is_first_response_segment: is_first_response_segment = False
-                        elif "message is not modified" not in str(e_edit_pfe).lower():
-                            print(f"Error editing final split part: {e_edit_pfe}")
-                    
-                    if remaining_text_for_new_msgs.strip():
-                        await send_text_in_segments(bot, active_telegram_msg.chat.id, remaining_text_for_new_msgs, active_telegram_msg.message_id, lang)
-                else: 
-                    target_reply_id = usr_msg.message_id if is_first_response_segment else active_telegram_msg.message_id
-                    if accumulated_response_text.strip():
-                         await send_text_in_segments(bot, active_telegram_msg.chat.id, accumulated_response_text, target_reply_id, lang)
+                        buffer = ""
+                        last_update_time = current_time
+                    except Exception as e_overflow:
+                        if "parse markdown" in str(e_overflow).lower():
+                            active_msg = await bot.send_message(
+                                active_msg.chat.id,
+                                buffer,
+                                reply_to_message_id=active_msg.message_id
+                            )
+                            buffer = ""
+                            last_update_time = current_time
+                        else:
+                            print(f"Error creating new message on overflow: {e_overflow}")
+                
+                elif buffer and current_time - last_update_time >= update_interval:
+                    try:
+                        await bot.edit_message_text(
+                            escape(buffer),
+                            chat_id=active_msg.chat.id,
+                            message_id=active_msg.message_id,
+                            parse_mode="MarkdownV2"
+                        )
+                        last_update_time = current_time
+                    except Exception as e_update:
+                        if "parse markdown" in str(e_update).lower():
+                            await bot.edit_message_text(
+                                buffer,
+                                chat_id=active_msg.chat.id,
+                                message_id=active_msg.message_id
+                            )
+                            last_update_time = current_time
+                        elif "message is too long" in str(e_update).lower():
+                            try:
+                                active_msg = await bot.send_message(
+                                    active_msg.chat.id,
+                                    escape(buffer),
+                                    reply_to_message_id=active_msg.message_id,
+                                    parse_mode="MarkdownV2"
+                                )
+                                buffer = ""
+                                last_update_time = current_time
+                            except Exception as e_new_msg:
+                                if "parse markdown" in str(e_new_msg).lower():
+                                    active_msg = await bot.send_message(
+                                        active_msg.chat.id,
+                                        buffer,
+                                        reply_to_message_id=active_msg.message_id
+                                    )
+                                    buffer = ""
+                                    last_update_time = current_time
+                                else:
+                                    print(f"Error creating new message after too-long error: {e_new_msg}")
+                        elif "message is not modified" not in str(e_update).lower():
+                            print(f"Update error: {e_update}")
+
+        if buffer:
+            try:
+                await bot.edit_message_text(
+                    escape(buffer),
+                    chat_id=active_msg.chat.id,
+                    message_id=active_msg.message_id,
+                    parse_mode="MarkdownV2"
+                )
+            except Exception as e_final:
+                if "parse markdown" in str(e_final).lower():
+                    await bot.edit_message_text(
+                        buffer,
+                        chat_id=active_msg.chat.id,
+                        message_id=active_msg.message_id
+                    )
+                elif "message is too long" in str(e_final).lower():
+                    try:
+                        await bot.send_message(
+                            active_msg.chat.id,
+                            escape(buffer),
+                            reply_to_message_id=active_msg.message_id,
+                            parse_mode="MarkdownV2"
+                        )
+                    except Exception as e_final_new:
+                        if "parse markdown" in str(e_final_new).lower():
+                            await bot.send_message(
+                                active_msg.chat.id,
+                                buffer,
+                                reply_to_message_id=active_msg.message_id
+                            )
+                        else:
+                            print(f"Error sending final new message: {e_final_new}")
+                elif "message is not modified" not in str(e_final).lower():
+                    print(f"Final update error: {e_final}")
 
     except Exception as e:
         traceback.print_exc()
         lang = getattr(usr_msg.from_user, 'language_code', 'en')
-        await bot.reply_to(usr_msg, f"{get_text('error', lang)} {str(e)}")
+        error_text = str(e)
+        if 'google.genai.errors.ServerError' in error_text or 'INTERNAL' in error_text:
+            await bot.reply_to(usr_msg, f"{get_text('error', lang)} [Gemini 500]")
+        else:
+            await bot.reply_to(usr_msg, f"{get_text('error', lang)} {error_text}")
